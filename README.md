@@ -1,5 +1,5 @@
 # wc_aio
-wc command using [io_uring](https://github.com/axboe/liburing)
+`wc` command using io_uring([liburing](https://github.com/axboe/liburing))
 
 # Usage
 
