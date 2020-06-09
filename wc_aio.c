@@ -33,6 +33,7 @@ struct io_data
 	int		idx;
 	off_t	offset;
 	size_t	len;
+	size_t	first_len;
 	struct iovec iov;
 	char buf[];
 };
@@ -50,6 +51,7 @@ count(struct file *f, const char *buf, int len)
 {
 	int nl = 0;
 	int nw = 0;
+
 	for (int i = 0; i < len; i++)
 	{
 		if (buf[i] == '\n')
@@ -104,6 +106,7 @@ queue_read_io(struct file *f, size_t size, int idx)
 	data->offset = f->read_offset;
 	data->iov.iov_base = &data->buf;
 	data->iov.iov_len = size;
+	data->first_len = size;
 
 	io_uring_prep_readv(sqe, f->fd, &data->iov, 1, f->read_offset);
 	io_uring_sqe_set_data(sqe, data);
@@ -137,12 +140,14 @@ wc(struct file *files, int nfiles)
 				if (this_size > BS)
 					this_size = BS;
 
+				if (this_size <= 0)
+					break;
+
 				if (queue_read_io(f, this_size, i))
 					break;
 
 				nreqs++;
 
-				/* If finish one file, go to the next file */
 				if (f->size > 0 && f->size == f->read_offset)
 					break;
 			}
@@ -157,7 +162,7 @@ wc(struct file *files, int nfiles)
 			break;
 		}
 
-		while (true)
+		while (nreqs > 0)
 		{
 			struct io_data *data;
 			int ret;
@@ -181,6 +186,7 @@ wc(struct file *files, int nfiles)
                 fprintf(stderr, "io_uring_peek_cqe: %s\n", strerror(-ret));
                 return;
             }
+
 			if (!cqe)
 				break;
 
@@ -188,19 +194,38 @@ wc(struct file *files, int nfiles)
 			if (cqe->res < 0)
 				return;
 
-			if (cqe->res == 0)
+			nreqs--;
+
+			if (cqe->res != data->iov.iov_len)
 			{
-				/*
-				 * We could reach here if reading from stdout. That is, nfiles is
-				 * 1 and file size is -1.
-				 */
-				assert(nfiles == 1 && files[0].size == -1);
-				nprocessed++;
-				break;
+				struct io_uring_sqe *sqe;
+
+
+				if (files[data->idx].size == -1)
+				{
+					assert(nfiles == 1 && files[0].size == -1);
+					nprocessed++;
+					break;
+				}
+
+
+				sqe = io_uring_get_sqe(&ring);
+				assert(sqe);
+
+				data->iov.iov_base += cqe->res;
+				data->iov.iov_len -= cqe->res;
+				data->offset += cqe->res;
+				io_uring_prep_readv(sqe, files[data->idx].fd,
+									&data->iov, 1, data->offset);
+				io_uring_sqe_set_data(sqe, data);
+				io_uring_cqe_seen(&ring, cqe);
+				io_uring_submit(&ring);
+				nreqs++;
+
+				continue;
 			}
 
-			count(&files[data->idx], data->buf, cqe->res);
-			nreqs--;
+			count(&files[data->idx], data->buf, data->first_len);
 
 			/* Have we processed all buffers? */
 			if (files[data->idx].count_left == 0)
@@ -225,7 +250,7 @@ wc(struct file *files, int nfiles)
 }
 
 int
-main (int argc, char **argv)
+main(int argc, char **argv)
 {
 	struct file *files;
 	int nfiles = 0;
@@ -279,6 +304,7 @@ main (int argc, char **argv)
 	}
 
 	workbuf = malloc((sizeof(struct io_data) + BS) * QD);
+	memset(workbuf, 0, (sizeof(struct io_data) + BS) * QD);
 	wc(files, nfiles);
 
 	for (int i = 0; i < nfiles; i++)
