@@ -22,7 +22,6 @@ struct file
 	int read_offset;
 	int count_left;
 
-	bool in_word;
 	int nlines;
 	int nbytes;
 	int nwords;
@@ -51,17 +50,18 @@ count(struct file *f, const char *buf, int len)
 {
 	int nl = 0;
 	int nw = 0;
+	bool in_word = false;
 
 	for (int i = 0; i < len; i++)
 	{
 		if (buf[i] == '\n')
 			nl++;
 
-		if (f->in_word && !isalpha(buf[i]))
-			f->in_word = false;
-		else if (!f->in_word && isalpha(buf[i]))
+		if (in_word && !isalpha(buf[i]))
+			in_word = false;
+		else if (!in_word && isalpha(buf[i]))
 		{
-			f->in_word = true;
+			in_word = true;
 			nw++;
 		}
 	}
