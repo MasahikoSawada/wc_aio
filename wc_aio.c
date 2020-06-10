@@ -192,7 +192,10 @@ wc(struct file *files, int nfiles)
 
 			data = io_uring_cqe_get_data(cqe);
 			if (cqe->res < 0)
+			{
+				fprintf(stderr, "io_uring_cqe_get_data: %s\n", strerror(-cqe->res));
 				return;
+			}
 
 			nreqs--;
 
